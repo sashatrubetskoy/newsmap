@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Kartographia News Service</title>
+<meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+<link href="https://api.mapbox.com/mapbox-gl-js/v2.4.1/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v2.4.1/mapbox-gl.js"></script>
+<style>
+  body { 
+    margin: 0; 
+    padding: 0; 
+  }
+  #map { 
+    position: absolute; 
+    top: 0; 
+    bottom: 0; 
+    width: 100%; 
+  }
+  #side-info {
+    position: absolute;
+    right: 20px;
+    top: 20px;
+    width: 200px;
+    opacity: 80%;
+    background-color: white;
+    font: 12px/20px sans-serif;
+  }
+  #side-info {
+    padding:  0px 10px 0px;
+    overflow: scroll;
+  }
+  #side-info h2 {
+    margin-block-start:  0.5em;
+    margin-block-end:  0.5em;
+  }
+  #side-info h3 {
+    margin-block-start:  0.5em;
+    margin-block-end:  0.5em;
+  }
+  #side-info p {
+    margin-block-start:  0.1em;
+  }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+<div id="top-keywords-panel"></div>
+<div id="side-info"></div>
+
+<script src="https://d3js.org/d3.v3.min.js"></script>
+<script src="https://d3js.org/topojson.v1.min.js"></script>
+<script src="newsLocations.js"></script>
+<script src="locationLinks.js"></script>
+
+<!-- <script src="https://kartographia1.s3.amazonaws.com/florida-pop-data.js" type="text/javascript"></script> -->
+<script>
+// EVENT HANDLERS AND UTILITY FUNCTIONS
+//------------------------------------------------------------------------------
+
+
+var uniqueObjArr = function(arr) {
+  var uniq = arr.filter((obj, index, self) =>
+    index === self.findIndex((t) => t.id === obj.id)
+  );
+  return uniq
+  }
+
+
+// DISPLAY TOP TAGS
+//------------------------------------------------------------------------------
+const getTopKeywords = () => {
+  var topKeywords = '';
+  document.getElementById('top-keywords-panel').innerHTML = topKeywords;
+}
+getTopKeywords()
+
+// MAPPING
+//------------------------------------------------------------------------------
+// TO MAKE THE MAP APPEAR YOU MUST
+// ADD YOUR ACCESS TOKEN FROM
+// https://account.mapbox.com
+mapboxgl.accessToken = 'pk.eyJ1IjoidHJ1YmV0c2tveSIsImEiOiJjazFwb3VoamUwemhzM29wc3ZjN3Y5Z2VoIn0.b8W8NzHjoohOmA45YucRqg';
+
+var startingCenter = [0, 0]; // starting position X, Y Tampa FL
+var startingZoom = 1;
+
+var popup = document.getElementById('side-info');
+let hoveredStateId = null;
+
+
+var setCircleProperties = (params) => {
+  // We wait until it is loaded, so that we can get the min and max of the data
+  // Then we update the circle radii.
+  // The counter thing prevents this from re-running every time the map is moved.
+
+  var counter = 0;
+  params.map.on("sourcedata", function(e) {
+    const isLoaded = (params.map.getSource(params.sourceName) && params.map.isSourceLoaded(params.sourceName));
+    if (isLoaded && counter<2){
+      console.log('source loaded!');
+      var features = uniqueObjArr(newsLocations['features']);
+      const vals = features.map(f => f.properties.circle_size);
+      const min = Math.min(...vals);
+      // const max = Math.max(...vals);
+      const max = vals.sort(function(a,b){return b-a})[1]; // second largest
+
+      params.map.setPaintProperty(params.layerName, 'circle-radius', {
+        'property': 'circle_size',
+        'stops': [
+          [min, 2],
+          [max, 20]
+        ]
+      });
+      params.map.setPaintProperty(params.layerName, 'circle-opacity', [
+        'case',
+        ['boolean', ['feature-state', 'hover'], false],
+        1,
+        [
+          'interpolate',
+          ['linear'],
+          ['get', 'circle_size'],
+          min, 1, max, 0.2
+        ],
+      ]);
+      counter++;
+      console.log('Changed circle properties.')
+    }
+  });
+}
+
+
+var setUpEvents = (params) => {
+  // Make it so clicking the basemap clears the content
+  params.map.on('click', (e) => {
+    // Change the cursor style as a UI indicator.
+    popup.innerHTML = '';
+  });
+
+  setUpLayerClick({
+    map: params.map,
+    layerName: 'newsEventsZ0'
+  })
+  setUpLayerClick({
+    map: params.map,
+    layerName: 'newsEventsZ1'
+  })
+  setUpCirclesHover({
+    map: params.map,
+    circleLayerName: 'newsEventsZ0',
+    lineLayerName: 'locationLinks'
+  })
+}
+
+var setUpCirclesHover = (params) => {
+  params.map.on('mousemove', params.circleLayerName, (event) => {
+    params.map.getCanvas().style.cursor = 'pointer';
+
+    if (event.features.length === 0) return;
+     
+    // When the mouse moves over the layer, update the
+    // feature state for the feature under the mouse
+    if (hoveredStateId) {
+      params.map.removeFeatureState({
+        source: params.circleLayerName,
+        id: hoveredStateId
+      });
+    }
+ 
+    hoveredStateId = event.features[0].id;
+ 
+    params.map.setFeatureState(
+      {
+        source: params.circleLayerName,
+        id: hoveredStateId
+      }, {
+        hover: true
+      }
+    );
+  });
+ 
+  // When the mouse leaves the layer, update the
+  // feature state of the previously hovered feature
+  params.map.on('mouseleave', params.circleLayerName, () => {
+    if (hoveredStateId) {
+      params.map.setFeatureState(
+        {
+          source: params.circleLayerName,
+          id: hoveredStateId
+        }, {
+          hover: false
+        }
+      );
+    }
+    hoveredStateId = null;
+    // Reset the cursor style
+    params.map.getCanvas().style.cursor = '';
+  });
+}
+
+
+var setUpLayerClick = (params) => {
+  params.map.on('mouseenter', params.layerName, (e) => {
+    // Change the cursor style as a UI indicator.
+    params.map.getCanvas().style.cursor = 'pointer';
+  });
+    
+  params.map.on('click', params.layerName, (e) => {
+    const tooltipHTML = e.features[0].properties.tooltip_html;
+    popup.innerHTML = tooltipHTML;
+  });     
+     
+  params.map.on('mouseleave', params.layerName, () => {
+    params.map.getCanvas().style.cursor = '';
+    // popup.remove();
+  });
+}
+
+
+var createMap = () => {
+  // Split the geojson by Z level so we can control render order
+  console.log(newsLocations);
+  const myJsonZ1 = {
+    'type': 'FeatureCollection',
+    'features': newsLocations['features'].filter(
+      obj => obj.properties.circle_z_order === 1)
+  };
+  const myJsonZ0 = {
+    'type': 'FeatureCollection',
+    'features': newsLocations['features'].filter(
+      obj => obj.properties.circle_z_order === 0)
+  };
+  // console.log('myJsonZ0', myJsonZ0);
+  // console.log('myJsonZ1', myJsonZ1);
+  
+  // Initialize the map and basemap
+  const map = new mapboxgl.Map({
+    container: 'map', // container ID
+    style: 'mapbox://styles/mapbox/dark-v10', // style URL
+    center: startingCenter, 
+    zoom: startingZoom // starting zoom
+  });
+   
+  map.on('load', () => {
+    // Create this source and layer before everything else
+    map.addSource('locationLinks', {
+      'type': 'geojson',
+      'data': locationLinks
+    });
+    map.addSource('newsEventsZ1', {
+      'type': 'geojson',
+      'data': myJsonZ1
+    });
+    map.addSource('newsEventsZ0', {
+      'type': 'geojson',
+      'data': myJsonZ0
+    });
+
+    // Add layers.
+    // Create the red dots after, so that they are always on top of the grey ones
+    // (red dots are primary locations)
+    map.addLayer({
+      'id': 'locationLinks',
+      'type': 'line',
+      'source': 'locationLinks', // reference the data source
+      'layout': {
+        'line-join': 'round',
+        'line-cap': 'round'
+      },
+      'paint': {
+        'line-color': 'red',
+        'line-width': 1,
+        'line-opacity': 0.01
+      }
+    });
+
+    map.addLayer({
+      'id': 'newsEventsZ0',
+      'type': 'circle',
+      'source': 'newsEventsZ0', // reference the data source
+      'layout': {},
+      'paint': {
+        'circle-color': ['get', 'circle_color'],
+        'circle-radius': 1,
+        'circle-stroke-width': 1,
+        'circle-stroke-color': 'white',
+      }
+    });
+
+    map.addLayer({
+      'id': 'newsEventsZ1',
+      'type': 'circle',
+      'source': 'newsEventsZ1', // reference the data source
+      'layout': {},
+      'paint': {
+        'circle-color': ['get', 'circle_color'],
+        'circle-radius': 1,
+        'circle-stroke-width': 1,
+        'circle-stroke-color': 'white'
+      }
+    });
+
+    setCircleProperties({
+      map: map,
+      sourceName: 'newsEventsZ0',
+      layerName: 'newsEventsZ0',
+    })
+    setCircleProperties({
+      map: map,
+      sourceName: 'newsEventsZ1',
+      layerName: 'newsEventsZ1',
+    })
+
+    setUpEvents({
+      map: map
+    })
+
+  });
+}
+
+createMap();
+
+</script>
+ 
+</body>
+</html>
